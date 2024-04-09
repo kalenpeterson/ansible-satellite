@@ -1,0 +1,80 @@
+---
+- name: Register system to Satellite server
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    rhel_release: "8.6"
+    rhsm_activation_keys: "RHE8_EUS_NONPROD"
+    rhsm_register_force: true
+    rhsm_fqdn: "sat6.lab.kalen.xyz"
+    rhsm_validate_certs: false
+    rhsm_token: 'REDACTED'
+    rhsm_organiization_id: "1"
+    rhsm_location_id: "2"
+    rhsm_operatingsystem_id: "4"
+    rhsm_update_packages: false
+    ansible_update_packages: true
+  tasks:
+    - name: Create temporary file for registation script
+      ansible.builtin.tempfile:
+        state: file
+        suffix: temp
+      register: tempfile
+
+    # Note needed when forced
+    # - name: Clean up old repos and unregister
+    #   ansible.builtin.shell: |
+    #     subscription-manager unregister
+    #     subscription-manager remove --all
+    #     subscription-manager clean
+    #     rm -f /etc/yum.repos.d/*
+    #     dnf clean all
+    #   ignore_errors: true
+
+    - name: Download registration script
+      ansible.builtin.uri:
+        url:
+          "https://{{ rhsm_fqdn }}/register\
+          ?activation_keys={{ rhsm_activation_keys }}\
+          &force={{ rhsm_register_force }}\
+          &location_id={{ rhsm_location_id }}\
+          &operatingsystem_id={{ rhsm_operatingsystem_id }}\
+          &organization_id={{ rhsm_organiization_id }}\
+          &update_packages={{ rhsm_update_packages }}"
+        headers:
+          Authorization: "Bearer {{ rhsm_token }}"
+        validate_certs: "{{ rhsm_validate_certs }}"
+        dest: "{{ tempfile.path }}"
+        mode: "0750"
+      register: download_result
+
+    - name: Execute downloaded file
+      ansible.builtin.shell: "{{ tempfile.path }}"
+      when: download_result.status == 200
+
+    - name: Cleanup the temporary file
+      ansible.builtin.file:
+        path: "{{ tempfile.path }}"
+        state: absent
+      when: tempfile.path is defined
+
+    - name: Perform yum upgrade
+      ansible.builtin.yum:
+        name: '*'
+        state: latest
+        update_cache: true
+      when: ansible_update_packages is true
+
+    - name: Check if reboot is required
+      ansible.builtin.command: dnf needs-restarting -r
+      register: reboot_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: Reboot server if required
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+        msg: "Ansible is rebooting to apply updates"
+      when: reboot_check.stdout | regex_search('Reboot is required')
+...
