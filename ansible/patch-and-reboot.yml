@@ -1,16 +1,17 @@
 ---
 - name: Update and upgrade RHEL server
   hosts: all
-  gather_facts: false
+  gather_facts: true
   become: true
   vars:
     release_upgrade: true
-    release_version: "8.6"
+    release_version: "8.8"
   tasks:
-    - name: Set RHSM release version
+    - name: Set RHEL release version
       community.general.rhsm_release:
-        release: "{{ release_upgrade }}"
-      when: release_upgrade is true and release_version is defined
+        release: "{{ release_version }}"
+      when: release_upgrade | bool is true and release_version is defined
+      register: release_result
 
     - name: Perform yum upgrade
       ansible.builtin.yum:
@@ -19,7 +20,8 @@
         update_cache: true
 
     - name: Check if reboot is required
-      ansible.builtin.command: dnf needs-restarting -r
+      ansible.builtin.shell: |
+        dnf needs-restarting -r
       register: reboot_check
       changed_when: false
       ignore_errors: true
@@ -29,4 +31,11 @@
         reboot_timeout: 600
         msg: "Ansible is rebooting to apply updates"
       when: reboot_check.stdout | regex_search('Reboot is required')
+
+    - name: Force a facts update
+      ansible.builtin.shell: |
+        subscription-manager facts --update
+      changed_when: false
+      ignore_errors: true
+      when: release_result.changed
 ...
